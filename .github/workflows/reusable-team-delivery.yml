@@ -1,0 +1,154 @@
+name: Shared team application delivery
+on:
+  workflow_call:
+    inputs:
+      target_ref:
+        required: true
+        type: string
+      central_repository:
+        required: true
+        type: string
+      central_sha:
+        required: true
+        type: string
+permissions:
+  contents: read
+env:
+  TARGET_REF: ${{ inputs.target_ref }}
+  CENTRAL_SHA: ${{ inputs.central_sha }}
+  CENTRAL_REPOSITORY: ${{ inputs.central_repository }}
+jobs:
+  publish:
+    name: Publish image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: ${{ inputs.target_ref }}-publish
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_uri: ${{ steps.publish.outputs.image_uri }}
+    steps:
+      - name: Verify immutable workflow and caller identity
+        env:
+          EXPECTED_ENVIRONMENT: ${{ inputs.target_ref }}-publish
+        run: |
+          python3 - <<'PY'
+          import base64,json,os,re,urllib.request
+          assert re.fullmatch(r'[a-f0-9]{40}',os.environ['CENTRAL_SHA'])
+          assert re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',os.environ['CENTRAL_REPOSITORY'])
+          assert os.environ['GITHUB_REF']=='refs/heads/main'
+          assert os.environ['GITHUB_EVENT_NAME'] in {'push','workflow_dispatch'}
+          req=urllib.request.Request(os.environ['ACTIONS_ID_TOKEN_REQUEST_URL']+'&audience=sts.amazonaws.com',headers={'Authorization':'Bearer '+os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})
+          with urllib.request.urlopen(req,timeout=20) as response: token=json.load(response)['value']
+          payload=token.split('.')[1];claims=json.loads(base64.urlsafe_b64decode(payload+'='*(-len(payload)%4)))
+          expected=os.environ['CENTRAL_REPOSITORY']+'/.github/workflows/reusable-team-delivery.yml@'+os.environ['CENTRAL_SHA']
+          assert claims['job_workflow_ref']==expected
+          assert claims['aud']=='sts.amazonaws.com'
+          assert claims['repository_id']==os.environ['GITHUB_REPOSITORY_ID']
+          assert claims['repository_owner_id']==os.environ['GITHUB_REPOSITORY_OWNER_ID']
+          assert claims['environment']==os.environ['EXPECTED_ENVIRONMENT']
+          assert claims['sub']==f"repository_id:{claims['repository_id']}:repository_owner_id:{claims['repository_owner_id']}:environment:{claims['environment']}:job_workflow_ref:{expected}"
+          print('Pinned reusable workflow and repository identity verified; token is not logged.')
+          PY
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.central_repository }}
+          ref: ${{ inputs.central_sha }}
+          persist-credentials: false
+          path: platform
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: source
+      - name: Build validated application commit
+        run: python3 platform/scripts/team_delivery.py build
+      - name: Authenticate publisher using GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::230001290423:role/aegisai-payments-dev-publisher
+          aws-region: ca-central-1
+          allowed-account-ids: '230001290423'
+          role-duration-seconds: 1800
+          role-session-name: aegis-publish-${{ github.run_id }}-${{ github.run_attempt }}
+          unset-current-credentials: true
+      - name: Publish immutable image and require clean ECR scan
+        id: publish
+        run: python3 platform/scripts/team_delivery.py publish
+      - name: Upload publishing evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegisai-published-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aegis-delivery/
+          if-no-files-found: error
+          retention-days: 14
+  deploy:
+    name: Deploy and verify EKS
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: ${{ inputs.target_ref }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Verify immutable workflow and caller identity
+        env:
+          EXPECTED_ENVIRONMENT: ${{ inputs.target_ref }}
+        run: |
+          python3 - <<'PY'
+          import base64,json,os,re,urllib.request
+          assert re.fullmatch(r'[a-f0-9]{40}',os.environ['CENTRAL_SHA'])
+          assert re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',os.environ['CENTRAL_REPOSITORY'])
+          assert os.environ['GITHUB_REF']=='refs/heads/main'
+          assert os.environ['GITHUB_EVENT_NAME'] in {'push','workflow_dispatch'}
+          req=urllib.request.Request(os.environ['ACTIONS_ID_TOKEN_REQUEST_URL']+'&audience=sts.amazonaws.com',headers={'Authorization':'Bearer '+os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})
+          with urllib.request.urlopen(req,timeout=20) as response: token=json.load(response)['value']
+          payload=token.split('.')[1];claims=json.loads(base64.urlsafe_b64decode(payload+'='*(-len(payload)%4)))
+          expected=os.environ['CENTRAL_REPOSITORY']+'/.github/workflows/reusable-team-delivery.yml@'+os.environ['CENTRAL_SHA']
+          assert claims['job_workflow_ref']==expected
+          assert claims['aud']=='sts.amazonaws.com'
+          assert claims['repository_id']==os.environ['GITHUB_REPOSITORY_ID']
+          assert claims['repository_owner_id']==os.environ['GITHUB_REPOSITORY_OWNER_ID']
+          assert claims['environment']==os.environ['EXPECTED_ENVIRONMENT']
+          assert claims['sub']==f"repository_id:{claims['repository_id']}:repository_owner_id:{claims['repository_owner_id']}:environment:{claims['environment']}:job_workflow_ref:{expected}"
+          print('Pinned reusable workflow and repository identity verified; token is not logged.')
+          PY
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.central_repository }}
+          ref: ${{ inputs.central_sha }}
+          persist-credentials: false
+          path: platform
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: aegisai-published-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aegis-delivery/
+      - name: Install checksum-verified matching kubectl
+        run: |
+          curl --fail --silent --show-error --location https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl -o /tmp/kubectl
+          echo '6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f  /tmp/kubectl' | sha256sum --check --strict
+          sudo install -m 755 /tmp/kubectl /usr/local/bin/kubectl
+      - name: Authenticate deployer using GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: arn:aws:iam::230001290423:role/aegisai-payments-dev-deployer
+          aws-region: ca-central-1
+          allowed-account-ids: '230001290423'
+          role-duration-seconds: 1800
+          role-session-name: aegis-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+          unset-current-credentials: true
+      - name: Deploy exact digest and verify running service
+        env:
+          IMAGE_URI: ${{ needs.publish.outputs.image_uri }}
+        run: python3 platform/scripts/team_delivery.py deploy
+      - name: Upload deployment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegisai-delivery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aegis-delivery/
+          if-no-files-found: error
+          retention-days: 14

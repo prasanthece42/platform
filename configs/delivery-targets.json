@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "targets": {
+    "payments-dev": {
+      "repository": "prasanthece42/platform",
+      "repository_id": "1430157480",
+      "repository_owner_id": "4831204",
+      "branch": "main",
+      "account_id": "230001290423",
+      "region": "ca-central-1",
+      "cluster": "aegisai-development",
+      "namespace": "payments-dev",
+      "application": "payment-api",
+      "service_account": "payment-api-runtime",
+      "ecr_repository": "aegisai/payment-api",
+      "publisher_role": "arn:aws:iam::230001290423:role/aegisai-payments-dev-publisher",
+      "deployer_role": "arn:aws:iam::230001290423:role/aegisai-payments-dev-deployer"
+    }
+  }
+}
