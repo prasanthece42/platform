@@ -25,24 +25,24 @@ on:
         default: '5000'
 permissions:
   contents: read
+env:
+  TEAM_DIRECTORY: ${{ inputs.source_directory }}
+  AEGIS_PLATFORM_DIRECTORY: ${{ github.workspace }}/platform
+  CENTRAL_REPOSITORY: ${{ inputs.central_repository }}
+  CENTRAL_SHA: ${{ inputs.central_sha }}
+  PIPELINE_VERSION: ${{ inputs.pipeline_version }}
+  CONTRACT_LIMIT: ${{ inputs.maximum_contract_latency_ms }}
+  RUN_INTEGRATION_TESTS: ${{ inputs.integration_tests }}
+  RUN_CONTRACT_EVALUATIONS: ${{ inputs.contract_evaluations }}
 jobs:
-  validation:
-    name: aegis-validation
+  source:
+    name: Source
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      TEAM_DIRECTORY: ${{ inputs.source_directory }}
-      AEGIS_PLATFORM_DIRECTORY: ${{ github.workspace }}/platform
-      CENTRAL_REPOSITORY: ${{ inputs.central_repository }}
-      CENTRAL_SHA: ${{ inputs.central_sha }}
-      PIPELINE_VERSION: ${{ inputs.pipeline_version }}
-      CONTRACT_LIMIT: ${{ inputs.maximum_contract_latency_ms }}
-    defaults:
-      run:
-        working-directory: source
+    timeout-minutes: 10
+    outputs:
+      source_digest: ${{ steps.capture.outputs.source_digest }}
     steps:
       - name: Validate central pin
-        working-directory: ${{ github.workspace }}
         run: |
           python3 - <<'PYCODE'
           import os,re
@@ -64,21 +64,206 @@ jobs:
         with:
           python-version: '3.12'
       - name: source
+        id: capture
+        working-directory: source
         run: python ../platform/scripts/team_validation.py source
+      - name: Share source snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegis-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aegis-team-transfer/source/
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - name: Upload stage evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegis-stage-${{ github.run_id }}-${{ github.run_attempt }}-source
+          path: ${{ runner.temp }}/aegis-team-validation/reports/
+          if-no-files-found: error
+          retention-days: 14
+  build:
+    name: Build
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      image_id: ${{ steps.bundle.outputs.image_id }}
+      image_digest: ${{ steps.bundle.outputs.image_digest }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: platform
+          repository: ${{ inputs.central_repository }}
+          ref: ${{ inputs.central_sha }}
+      - uses: ./platform/.github/actions/restore-team-runner
+        with:
+          source_digest: ${{ needs.source.outputs.source_digest }}
+          restore_image: 'false'
+      - name: Prepare isolated runner
+        run: python platform/scripts/team_validation.py prepare-image
       - name: build
-        run: python ../platform/scripts/team_validation.py build
+        run: python platform/scripts/team_validation.py build
+      - name: Export immutable runner
+        id: bundle
+        run: python platform/scripts/team_validation.py export-image
+      - name: Share runner image
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegis-runner-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aegis-team-transfer/image/
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - name: Upload stage evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegis-stage-${{ github.run_id }}-${{ github.run_attempt }}-build
+          path: ${{ runner.temp }}/aegis-team-validation/reports/
+          if-no-files-found: error
+          retention-days: 14
+  unit_tests:
+    name: Unit tests
+    needs: [source, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: platform
+          repository: ${{ inputs.central_repository }}
+          ref: ${{ inputs.central_sha }}
+      - uses: ./platform/.github/actions/restore-team-runner
+        with:
+          source_digest: ${{ needs.source.outputs.source_digest }}
+          image_id: ${{ needs.build.outputs.image_id }}
+          image_digest: ${{ needs.build.outputs.image_digest }}
       - name: tests
-        run: python ../platform/scripts/team_validation.py tests
+        run: python platform/scripts/team_validation.py tests
+      - name: Upload stage evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegis-stage-${{ github.run_id }}-${{ github.run_attempt }}-unit_tests
+          path: ${{ runner.temp }}/aegis-team-validation/reports/
+          if-no-files-found: error
+          retention-days: 14
+  integration_tests:
+    name: Integration tests
+    needs: [source, build, unit_tests]
+    if: ${{ inputs.integration_tests }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: platform
+          repository: ${{ inputs.central_repository }}
+          ref: ${{ inputs.central_sha }}
+      - uses: ./platform/.github/actions/restore-team-runner
+        with:
+          source_digest: ${{ needs.source.outputs.source_digest }}
+          image_id: ${{ needs.build.outputs.image_id }}
+          image_digest: ${{ needs.build.outputs.image_digest }}
       - name: integration_tests
-        if: ${{ inputs.integration_tests }}
-        run: python ../platform/scripts/team_validation.py integration_tests
+        run: python platform/scripts/team_validation.py integration_tests
+      - name: Upload stage evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegis-stage-${{ github.run_id }}-${{ github.run_attempt }}-integration_tests
+          path: ${{ runner.temp }}/aegis-team-validation/reports/
+          if-no-files-found: error
+          retention-days: 14
+  security:
+    name: Security
+    needs: [source, build, unit_tests, integration_tests]
+    if: ${{ always() && !cancelled() && needs.unit_tests.result == 'success' && (needs.integration_tests.result == 'success' || (!inputs.integration_tests && needs.integration_tests.result == 'skipped')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: platform
+          repository: ${{ inputs.central_repository }}
+          ref: ${{ inputs.central_sha }}
+      - uses: ./platform/.github/actions/restore-team-runner
+        with:
+          source_digest: ${{ needs.source.outputs.source_digest }}
+          image_id: ${{ needs.build.outputs.image_id }}
+          image_digest: ${{ needs.build.outputs.image_digest }}
       - name: security
-        run: python ../platform/scripts/team_validation.py security
+        run: python platform/scripts/team_validation.py security
+      - name: Upload stage evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegis-stage-${{ github.run_id }}-${{ github.run_attempt }}-security
+          path: ${{ runner.temp }}/aegis-team-validation/reports/
+          if-no-files-found: error
+          retention-days: 14
+  contract_evaluations:
+    name: Contract checks
+    needs: [source, build, security]
+    if: ${{ always() && !cancelled() && inputs.contract_evaluations && needs.security.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: platform
+          repository: ${{ inputs.central_repository }}
+          ref: ${{ inputs.central_sha }}
+      - uses: ./platform/.github/actions/restore-team-runner
+        with:
+          source_digest: ${{ needs.source.outputs.source_digest }}
+          image_id: ${{ needs.build.outputs.image_id }}
+          image_digest: ${{ needs.build.outputs.image_digest }}
       - name: evaluations
-        if: ${{ inputs.contract_evaluations }}
-        run: python ../platform/scripts/team_validation.py evaluations
+        run: python platform/scripts/team_validation.py evaluations
+      - name: Upload stage evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegis-stage-${{ github.run_id }}-${{ github.run_attempt }}-contract_evaluations
+          path: ${{ runner.temp }}/aegis-team-validation/reports/
+          if-no-files-found: error
+          retention-days: 14
+  evidence:
+    name: Evidence
+    needs: [source, build, unit_tests, integration_tests, security, contract_evaluations]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: platform
+          repository: ${{ inputs.central_repository }}
+          ref: ${{ inputs.central_sha }}
+      - uses: ./platform/.github/actions/restore-team-runner
+        with:
+          source_digest: ${{ needs.source.outputs.source_digest }}
+          restore_image: 'false'
+      - name: Collect stage reports
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: aegis-stage-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/aegis-team-validation/reports/
+          merge-multiple: true
       - name: release
-        run: python ../platform/scripts/team_validation.py release
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+          EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+        run: python platform/scripts/team_validation.py release
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
