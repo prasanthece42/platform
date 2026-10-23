@@ -1,0 +1,3 @@
+title = "AegisAI mandatory secrets baseline"
+[extend]
+useDefault = true

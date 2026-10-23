@@ -1,0 +1,29 @@
+rules:
+  - id: python-dynamic-evaluation
+    languages: [python]
+    severity: ERROR
+    message: Dynamic evaluation of code is forbidden.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+  - id: python-shell-injection
+    languages: [python]
+    severity: ERROR
+    message: Shell command execution requires an explicit security review.
+    pattern-either:
+      - pattern: subprocess.$METHOD(..., shell=True, ...)
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+  - id: python-unsafe-deserialization
+    languages: [python]
+    severity: ERROR
+    message: Unsafe deserialization is forbidden.
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: yaml.unsafe_load(...)
+  - id: python-disabled-tls
+    languages: [python]
+    severity: ERROR
+    message: TLS certificate verification must remain enabled.
+    pattern: requests.$METHOD(..., verify=False, ...)

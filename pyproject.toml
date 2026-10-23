@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools==83.0.0", "wheel==0.46.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "team-payment-api"
+version = "0.1.0"
+description = "A small payment-record ledger for shared-pipeline validation"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["fastapi==0.158.1", "pydantic==2.14.1", "uvicorn==0.34.2"]
+
+[project.optional-dependencies]
+ci = ["build==1.2.2.post1", "setuptools==83.0.0", "wheel==0.46.2", "pytest==9.1.1", "httpx==0.28.1"]
+
+[tool.setuptools.packages.find]
+include = ["payments_api*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008"]

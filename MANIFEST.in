@@ -1,0 +1,2 @@
+include requirements-ci.txt
+recursive-include tests *.py

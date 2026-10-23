@@ -1,0 +1,89 @@
+name: Shared team application validation
+on:
+  workflow_call:
+    inputs:
+      source_directory:
+        required: true
+        type: string
+      central_repository:
+        required: true
+        type: string
+      central_sha:
+        required: true
+        type: string
+      pipeline_version:
+        required: true
+        type: string
+      integration_tests:
+        type: boolean
+        default: true
+      contract_evaluations:
+        type: boolean
+        default: true
+      maximum_contract_latency_ms:
+        type: string
+        default: '5000'
+permissions:
+  contents: read
+jobs:
+  validation:
+    name: aegis-validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TEAM_DIRECTORY: ${{ inputs.source_directory }}
+      AEGIS_PLATFORM_DIRECTORY: ${{ github.workspace }}/platform
+      CENTRAL_REPOSITORY: ${{ inputs.central_repository }}
+      CENTRAL_SHA: ${{ inputs.central_sha }}
+      PIPELINE_VERSION: ${{ inputs.pipeline_version }}
+      CONTRACT_LIMIT: ${{ inputs.maximum_contract_latency_ms }}
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - name: Validate central pin
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 - <<'PYCODE'
+          import os,re
+          assert re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", os.environ["CENTRAL_REPOSITORY"])
+          assert re.fullmatch(r"[a-f0-9]{40}", os.environ["CENTRAL_SHA"])
+          PYCODE
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: source
+          ref: ${{ github.sha }}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          path: platform
+          repository: ${{ inputs.central_repository }}
+          ref: ${{ inputs.central_sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: source
+        run: python ../platform/scripts/team_validation.py source
+      - name: build
+        run: python ../platform/scripts/team_validation.py build
+      - name: tests
+        run: python ../platform/scripts/team_validation.py tests
+      - name: integration_tests
+        if: ${{ inputs.integration_tests }}
+        run: python ../platform/scripts/team_validation.py integration_tests
+      - name: security
+        run: python ../platform/scripts/team_validation.py security
+      - name: evaluations
+        if: ${{ inputs.contract_evaluations }}
+        run: python ../platform/scripts/team_validation.py evaluations
+      - name: release
+        run: python ../platform/scripts/team_validation.py release
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aegisai-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/aegis-team-validation/reports/
+          if-no-files-found: error
+          retention-days: 14
