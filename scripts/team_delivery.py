@@ -18,15 +18,29 @@ DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
 SHA = re.compile(r"[a-f0-9]{40}")
 
 
+class CommandFailed(RuntimeError):
+    def __init__(self, message: str, aws_code: str | None = None):
+        super().__init__(message)
+        self.aws_code = aws_code
+
+
 def run(arguments: list[str], *, stdin: str | None = None, timeout: int = 180) -> str:
     result = subprocess.run(
         arguments, input=stdin, capture_output=True, text=True, timeout=timeout
     )
     if result.returncode:
         # Do not echo command arguments, credentials, or arbitrary subprocess output.
-        raise RuntimeError(
-            f"{arguments[0]} {arguments[1]} failed (exit {result.returncode})"
+        match = (
+            re.search(
+                r"An error occurred \(([A-Za-z0-9]+)\) when calling the ([A-Za-z0-9]+) operation",
+                result.stderr,
+            )
+            if arguments[0] == "aws"
+            else None
         )
+        code = match.group(1) if match else None
+        detail = f"{match.group(2)}: {code}" if match else f"exit {result.returncode}"
+        raise CommandFailed(f"{arguments[0]} {arguments[1]} failed ({detail})", code)
     return result.stdout.strip()
 
 
@@ -254,14 +268,23 @@ def build(profile: dict[str, str]) -> None:
 
 def scan(profile: dict[str, str], digest: str) -> dict[str, Any]:
     for _ in range(40):
-        result = aws(
-            "ecr",
-            "describe-image-scan-findings",
-            "--repository-name",
-            profile["ecr_repository"],
-            "--image-id",
-            "imageDigest=" + digest,
-        )
+        try:
+            result = aws(
+                "ecr",
+                "describe-image-scan-findings",
+                "--repository-name",
+                profile["ecr_repository"],
+                "--image-id",
+                "imageDigest=" + digest,
+            )
+        except CommandFailed as error:
+            if error.aws_code not in {
+                "ScanNotFoundException",
+                "ImageNotFoundException",
+            }:
+                raise
+            time.sleep(5)
+            continue
         status = result.get("imageScanStatus", {}).get("status")
         if status == "COMPLETE":
             counts = result.get("imageScanFindings", {}).get(
