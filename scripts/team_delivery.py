@@ -238,6 +238,8 @@ def build(profile: dict[str, str]) -> None:
         [
             "docker",
             "build",
+            "--provenance=false",
+            "--sbom=false",
             "--platform",
             "linux/amd64",
             "--label",
