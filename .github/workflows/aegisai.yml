@@ -1,0 +1,40 @@
+name: Team application pipeline
+run-name: AegisAI ${{ inputs.request_id || github.run_id }}
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+  workflow_dispatch:
+    inputs:
+      request_id:
+        required: true
+        type: string
+      pipeline_version:
+        required: true
+        type: string
+      integration_tests:
+        type: boolean
+        default: false
+      contract_evaluations:
+        type: boolean
+        default: false
+      maximum_contract_latency_ms:
+        type: string
+        default: '5000'
+permissions:
+  contents: read
+concurrency:
+  group: aegisai-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validation:
+    uses: prasanthece42/platform/.github/workflows/reusable-team-validation.yml@ac5df66415b2469384800738330a001a9f0038c9
+    with:
+      central_repository: prasanthece42/platform
+      central_sha: 'ac5df66415b2469384800738330a001a9f0038c9'
+      source_directory: .
+      pipeline_version: ${{ inputs.pipeline_version || 'repository-default' }}
+      integration_tests: ${{ inputs.integration_tests || false }}
+      contract_evaluations: ${{ inputs.contract_evaluations || false }}
+      maximum_contract_latency_ms: ${{ inputs.maximum_contract_latency_ms || '5000' }}
