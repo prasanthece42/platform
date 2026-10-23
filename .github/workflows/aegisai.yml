@@ -29,10 +29,10 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validation:
-    uses: prasanthece42/platform/.github/workflows/reusable-team-validation.yml@ac5df66415b2469384800738330a001a9f0038c9
+    uses: prasanthece42/platform/.github/workflows/reusable-team-validation.yml@37997df5cf37e9fa2d77d03e84ff3bc43ea1d07f
     with:
       central_repository: prasanthece42/platform
-      central_sha: 'ac5df66415b2469384800738330a001a9f0038c9'
+      central_sha: '37997df5cf37e9fa2d77d03e84ff3bc43ea1d07f'
       source_directory: .
       pipeline_version: ${{ inputs.pipeline_version || 'repository-default' }}
       integration_tests: ${{ inputs.integration_tests || false }}
