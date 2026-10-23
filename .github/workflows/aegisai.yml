@@ -44,8 +44,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: prasanthece42/platform/.github/workflows/reusable-team-delivery.yml@35060a08255240e82058070ee311a221e8a38a66
+    uses: prasanthece42/platform/.github/workflows/reusable-team-delivery.yml@871237b2d86276640c80901691e48b030267d32d
     with:
       target_ref: payments-dev
       central_repository: prasanthece42/platform
-      central_sha: '35060a08255240e82058070ee311a221e8a38a66'
+      central_sha: '871237b2d86276640c80901691e48b030267d32d'
