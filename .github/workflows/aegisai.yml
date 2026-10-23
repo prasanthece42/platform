@@ -40,12 +40,12 @@ jobs:
       maximum_contract_latency_ms: ${{ inputs.maximum_contract_latency_ms || '5000' }}
   delivery:
     needs: validation
-    if: ${{ github.ref == 'refs/heads/main' && vars.AEGISAI_DELIVERY_ENABLED == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.AEGISAI_DELIVERY_ENABLED == 'true' }}
     permissions:
       contents: read
       id-token: write
-    uses: prasanthece42/platform/.github/workflows/reusable-team-delivery.yml@871237b2d86276640c80901691e48b030267d32d
+    uses: prasanthece42/platform/.github/workflows/reusable-team-delivery.yml@2883c1b777c4c6042801a7de8d147e929ca5832c
     with:
       target_ref: payments-dev
       central_repository: prasanthece42/platform
-      central_sha: '871237b2d86276640c80901691e48b030267d32d'
+      central_sha: '2883c1b777c4c6042801a7de8d147e929ca5832c'
