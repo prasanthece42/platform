@@ -35,6 +35,6 @@ jobs:
       central_sha: 'ac5df66415b2469384800738330a001a9f0038c9'
       source_directory: .
       pipeline_version: ${{ inputs.pipeline_version || 'repository-default' }}
-      integration_tests: ${{ inputs.integration_tests }}
-      contract_evaluations: ${{ inputs.contract_evaluations }}
+      integration_tests: ${{ inputs.integration_tests || false }}
+      contract_evaluations: ${{ inputs.contract_evaluations || false }}
       maximum_contract_latency_ms: ${{ inputs.maximum_contract_latency_ms || '5000' }}
