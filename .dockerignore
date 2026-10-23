@@ -1,0 +1,5 @@
+**
+!requirements-runtime.txt
+!payments_api/
+!payments_api/*.py
+!Dockerfile
