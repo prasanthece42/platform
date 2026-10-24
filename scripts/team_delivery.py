@@ -67,8 +67,24 @@ def target() -> dict[str, str]:
     if registry.get("version") != 1 or key not in registry["targets"]:
         raise ValueError("Unknown centrally approved deployment target")
     profile = registry["targets"][key]
-    if key != "payments-dev" or profile["namespace"] != key:
-        raise ValueError("Only the development pilot is enabled")
+    if (
+        not re.fullmatch(r"[a-z][a-z0-9-]{1,60}-dev", key)
+        or profile["namespace"] != key
+        or profile["branch"] != "main"
+        or profile["account_id"] != "230001290423"
+        or profile["region"] != "ca-central-1"
+        or profile["cluster"] != "aegisai-development"
+        or profile.get("workload", "payments") not in {"payments", "stateless-chatbot"}
+    ):
+        raise ValueError("Only registered development targets are enabled")
+    for phase in ("publisher", "deployer"):
+        expected_role = (
+            f"arn:aws:iam::{profile['account_id']}:role/aegisai-{key}-{phase}"
+        )
+        if profile[f"{phase}_role"] != expected_role:
+            raise ValueError(
+                "Target role differs from the registered development boundary"
+            )
     for claim, expected in (
         ("GITHUB_REPOSITORY", "repository"),
         ("GITHUB_REPOSITORY_ID", "repository_id"),
@@ -111,7 +127,7 @@ def manifest(profile: dict[str, str], image: str, source_sha: str) -> dict[str, 
         raise ValueError("Invalid source commit")
     name, namespace = profile["application"], profile["namespace"]
     labels = {"app.kubernetes.io/name": name, "app.kubernetes.io/managed-by": "aegisai"}
-    return {
+    result = {
         "apiVersion": "v1",
         "kind": "List",
         "items": [
@@ -211,6 +227,16 @@ def manifest(profile: dict[str, str], image: str, source_sha: str) -> dict[str, 
             },
         ],
     }
+    if profile.get("workload", "payments") == "stateless-chatbot":
+        workload = result["items"][1]
+        workload["kind"] = "Deployment"
+        workload["spec"].pop("serviceName")
+        pod = workload["spec"]["template"]["spec"]
+        container = pod["containers"][0]
+        container["env"] = [{"name": "PYTHONDONTWRITEBYTECODE", "value": "1"}]
+        container["volumeMounts"] = [{"name": "temporary", "mountPath": "/tmp"}]
+        pod["volumes"] = [{"name": "temporary", "emptyDir": {"sizeLimit": "64Mi"}}]
+    return result
 
 
 def evidence_path(name: str) -> Path:
@@ -409,7 +435,12 @@ def deploy(profile: dict[str, str]) -> None:
             *kubectl,
             "rollout",
             "status",
-            "statefulset/" + profile["application"],
+            (
+                "deployment/"
+                if profile.get("workload") == "stateless-chatbot"
+                else "statefulset/"
+            )
+            + profile["application"],
             "--timeout=300s",
         ],
         timeout=320,
@@ -432,9 +463,14 @@ def deploy(profile: dict[str, str]) -> None:
         or pods["items"][0]["spec"]["containers"][0]["image"] != image
     ):
         raise ValueError("Running workload differs from the published digest")
-    volume = json.loads(run([*kubectl, "get", "pvc", "payment-api-data", "-o", "json"]))
-    if volume.get("status", {}).get("phase") != "Bound":
-        raise ValueError("Durable application storage is not bound")
+    storage = "not-required"
+    if profile.get("workload", "payments") == "payments":
+        volume = json.loads(
+            run([*kubectl, "get", "pvc", "payment-api-data", "-o", "json"])
+        )
+        if volume.get("status", {}).get("phase") != "Bound":
+            raise ValueError("Durable application storage is not bound")
+        storage = "Bound"
     with tempfile.TemporaryFile() as logs:
         forward = subprocess.Popen(
             [
@@ -464,11 +500,33 @@ def deploy(profile: dict[str, str]) -> None:
                 time.sleep(1)
             else:
                 raise TimeoutError("Deployed application health check did not pass")
-            with urllib.request.urlopen(
-                "http://127.0.0.1:18080/payments", timeout=5
-            ) as response:
-                if response.status != 200 or not isinstance(json.load(response), list):
-                    raise ValueError("Deployed application API check failed")
+            if profile.get("workload") == "stateless-chatbot":
+                request = urllib.request.Request(
+                    "http://127.0.0.1:18080/api/chat",
+                    data=json.dumps(
+                        {"message": "Explain the pipeline", "history": []}
+                    ).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    reply = json.load(response)
+                    if (
+                        response.status != 200
+                        or reply.get("provider") != "demo-faq"
+                        or reply.get("live_ai") is not False
+                        or not reply.get("reply")
+                        or reply.get("topic") != "pipeline"
+                    ):
+                        raise ValueError("Deployed chatbot API verification failed")
+            else:
+                with urllib.request.urlopen(
+                    "http://127.0.0.1:18080/payments", timeout=5
+                ) as response:
+                    if response.status != 200 or not isinstance(
+                        json.load(response), list
+                    ):
+                        raise ValueError("Deployed application API check failed")
         finally:
             forward.terminate()
             try:
@@ -483,7 +541,7 @@ def deploy(profile: dict[str, str]) -> None:
             "image": image,
             "cluster": profile["cluster"],
             "namespace": profile["namespace"],
-            "storage": "Bound",
+            "storage": storage,
             "health": "passed",
             "api": "passed",
             "status": "succeeded",
@@ -491,13 +549,23 @@ def deploy(profile: dict[str, str]) -> None:
     )
 
 
+def configure(profile: dict[str, str]) -> None:
+    with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+        for key in ("publisher_role", "deployer_role", "account_id", "region"):
+            if "\n" in profile[key] or "\r" in profile[key]:
+                raise ValueError("Invalid target output")
+            output.write(key + "=" + profile[key] + "\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=["build", "publish", "deploy"])
+    parser.add_argument("phase", choices=["configure", "build", "publish", "deploy"])
     args = parser.parse_args()
     try:
         profile = target()
-        {"build": build, "publish": publish, "deploy": deploy}[args.phase](profile)
+        {"configure": configure, "build": build, "publish": publish, "deploy": deploy}[
+            args.phase
+        ](profile)
     except Exception as error:
         write_report(
             "failure.json",

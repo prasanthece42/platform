@@ -15,6 +15,22 @@
       "ecr_repository": "aegisai/payment-api",
       "publisher_role": "arn:aws:iam::230001290423:role/aegisai-payments-dev-publisher",
       "deployer_role": "arn:aws:iam::230001290423:role/aegisai-payments-dev-deployer"
+    },
+    "ai-platform-harbor-chat1-dev": {
+      "repository": "prasanthece42/harbor-chat1",
+      "repository_id": "1431697514",
+      "repository_owner_id": "4831204",
+      "branch": "main",
+      "account_id": "230001290423",
+      "region": "ca-central-1",
+      "cluster": "aegisai-development",
+      "namespace": "ai-platform-harbor-chat1-dev",
+      "application": "harbor-chat1",
+      "service_account": "harbor-chat1-runtime",
+      "ecr_repository": "aegisai/harbor-chat1",
+      "publisher_role": "arn:aws:iam::230001290423:role/aegisai-ai-platform-harbor-chat1-dev-publisher",
+      "deployer_role": "arn:aws:iam::230001290423:role/aegisai-ai-platform-harbor-chat1-dev-deployer",
+      "workload": "stateless-chatbot"
     }
   }
 }

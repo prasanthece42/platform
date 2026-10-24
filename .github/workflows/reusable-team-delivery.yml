@@ -62,14 +62,17 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           path: source
+      - name: Resolve registered development target
+        id: target
+        run: python3 platform/scripts/team_delivery.py configure
       - name: Build validated application commit
         run: python3 platform/scripts/team_delivery.py build
       - name: Authenticate publisher using GitHub OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
-          role-to-assume: arn:aws:iam::230001290423:role/aegisai-payments-dev-publisher
-          aws-region: ca-central-1
-          allowed-account-ids: '230001290423'
+          role-to-assume: ${{ steps.target.outputs.publisher_role }}
+          aws-region: ${{ steps.target.outputs.region }}
+          allowed-account-ids: ${{ steps.target.outputs.account_id }}
           role-duration-seconds: 1800
           role-session-name: aegis-publish-${{ github.run_id }}-${{ github.run_attempt }}
           unset-current-credentials: true
@@ -122,6 +125,9 @@ jobs:
           ref: ${{ inputs.central_sha }}
           persist-credentials: false
           path: platform
+      - name: Resolve registered development target
+        id: target
+        run: python3 platform/scripts/team_delivery.py configure
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: aegisai-published-image-${{ github.run_id }}-${{ github.run_attempt }}
@@ -134,9 +140,9 @@ jobs:
       - name: Authenticate deployer using GitHub OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
-          role-to-assume: arn:aws:iam::230001290423:role/aegisai-payments-dev-deployer
-          aws-region: ca-central-1
-          allowed-account-ids: '230001290423'
+          role-to-assume: ${{ steps.target.outputs.deployer_role }}
+          aws-region: ${{ steps.target.outputs.region }}
+          allowed-account-ids: ${{ steps.target.outputs.account_id }}
           role-duration-seconds: 1800
           role-session-name: aegis-deploy-${{ github.run_id }}-${{ github.run_attempt }}
           unset-current-credentials: true
