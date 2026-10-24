@@ -150,6 +150,8 @@ jobs:
         env:
           IMAGE_URI: ${{ needs.publish.outputs.image_uri }}
         run: python3 platform/scripts/team_delivery.py deploy
+      - name: Verify public HTTPS website
+        run: python3 platform/scripts/team_delivery.py website
       - name: Upload deployment evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

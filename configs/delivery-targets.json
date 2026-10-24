@@ -30,7 +30,8 @@
       "ecr_repository": "aegisai/harbor-chat1",
       "publisher_role": "arn:aws:iam::230001290423:role/aegisai-ai-platform-harbor-chat1-dev-publisher",
       "deployer_role": "arn:aws:iam::230001290423:role/aegisai-ai-platform-harbor-chat1-dev-deployer",
-      "workload": "stateless-chatbot"
+      "workload": "stateless-chatbot",
+      "website_url": "https://d105drefx6ljd4.cloudfront.net"
     }
   }
 }

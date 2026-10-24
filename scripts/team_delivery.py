@@ -557,15 +557,95 @@ def configure(profile: dict[str, str]) -> None:
             output.write(key + "=" + profile[key] + "\n")
 
 
+def website(profile: dict[str, str]) -> None:
+    """Require the registered HTTPS entry point and real application behavior."""
+    url = profile.get("website_url")
+    if url is None:
+        return
+    if profile.get("workload") != "stateless-chatbot" or not re.fullmatch(
+        r"https://[a-z0-9]{8,64}\.cloudfront\.net", url
+    ):
+        raise ValueError("Unregistered public website URL")
+
+    def check(path: str, *, data: bytes | None = None) -> bytes:
+        request = urllib.request.Request(
+            url + path,
+            data=data,
+            headers={"Content-Type": "application/json"} if data else {},
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            if response.status != 200 or response.url != url + path:
+                raise ValueError("Website returned an unexpected status or redirect")
+            body = response.read(1_048_577)
+            if len(body) > 1_048_576:
+                raise ValueError("Website response exceeds verification limit")
+            return body
+
+    for attempt in range(24):
+        try:
+            if json.loads(check("/health")) != {"status": "ok"}:
+                raise ValueError("Website health check failed")
+            page = check("/").decode()
+            if "<title>Harbor" not in page or 'id="chat-form"' not in page:
+                raise ValueError("Website does not serve the expected chatbot page")
+            for path in ("/static/chat.css", "/static/chat.js"):
+                if not check(path):
+                    raise ValueError("Website asset is empty")
+            reply = json.loads(
+                check(
+                    "/api/chat",
+                    data=json.dumps(
+                        {"message": "Explain the pipeline", "history": []}
+                    ).encode(),
+                )
+            )
+            if (
+                reply.get("provider") != "demo-faq"
+                or reply.get("live_ai") is not False
+                or not reply.get("reply")
+                or reply.get("topic") != "pipeline"
+            ):
+                raise ValueError("Public chatbot API verification failed")
+            break
+        except (OSError, ValueError):
+            if attempt == 23:
+                raise
+            time.sleep(5)
+    write_report(
+        "website.json",
+        {
+            **provenance(profile),
+            "website_url": url,
+            "https": "passed",
+            "page": "passed",
+            "assets": "passed",
+            "api": "passed",
+            "status": "succeeded",
+        },
+    )
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with Path(summary).open("a") as output:
+            output.write(
+                f"\n### Development website\n\n[Open app]({url})\n\nHTTPS, page, assets and chat API verified.\n"
+            )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=["configure", "build", "publish", "deploy"])
+    parser.add_argument(
+        "phase", choices=["configure", "build", "publish", "deploy", "website"]
+    )
     args = parser.parse_args()
     try:
         profile = target()
-        {"configure": configure, "build": build, "publish": publish, "deploy": deploy}[
-            args.phase
-        ](profile)
+        {
+            "configure": configure,
+            "build": build,
+            "publish": publish,
+            "deploy": deploy,
+            "website": website,
+        }[args.phase](profile)
     except Exception as error:
         write_report(
             "failure.json",
