@@ -14,6 +14,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from scripts.application_identity import names
+else:
+    from application_identity import names
+
 DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
 SHA = re.compile(r"[a-f0-9]{40}")
 
@@ -67,8 +72,31 @@ def target() -> dict[str, str]:
     if registry.get("version") != 1 or key not in registry["targets"]:
         raise ValueError("Unknown centrally approved deployment target")
     profile = registry["targets"][key]
-    if key != "payments-dev" or profile["namespace"] != key:
-        raise ValueError("Only the development pilot is enabled")
+    if (
+        not re.fullmatch(r"[a-z][a-z0-9-]{1,60}-dev", key)
+        or profile["namespace"] != key
+        or profile["branch"] != "main"
+        or profile["account_id"] != "230001290423"
+        or profile["region"] != "ca-central-1"
+        or profile["cluster"] not in {
+            "aegisai-development",
+            names(profile.get("team_id", "legacy"), profile["application"])["cluster"],
+        }
+        or profile.get("workload", "payments") not in {"payments", "stateless-chatbot", "python-service"}
+    ):
+        raise ValueError("Only registered development targets are enabled")
+    if profile["cluster"] != "aegisai-development":
+        identity = names(profile["team_id"], profile["application"])
+        if any(profile[key] != identity[key] for key in ("cluster", "namespace", "ecr_repository")):
+            raise ValueError("Dedicated application infrastructure identity mismatch")
+    for phase in ("publisher", "deployer"):
+        expected_role = (
+            f"arn:aws:iam::{profile['account_id']}:role/aegisai-{key}-{phase}"
+        )
+        if profile[f"{phase}_role"] != expected_role:
+            raise ValueError(
+                "Target role differs from the registered development boundary"
+            )
     for claim, expected in (
         ("GITHUB_REPOSITORY", "repository"),
         ("GITHUB_REPOSITORY_ID", "repository_id"),
@@ -111,7 +139,7 @@ def manifest(profile: dict[str, str], image: str, source_sha: str) -> dict[str, 
         raise ValueError("Invalid source commit")
     name, namespace = profile["application"], profile["namespace"]
     labels = {"app.kubernetes.io/name": name, "app.kubernetes.io/managed-by": "aegisai"}
-    return {
+    result = {
         "apiVersion": "v1",
         "kind": "List",
         "items": [
@@ -211,6 +239,16 @@ def manifest(profile: dict[str, str], image: str, source_sha: str) -> dict[str, 
             },
         ],
     }
+    if profile.get("workload", "payments") in {"stateless-chatbot", "python-service"}:
+        workload = result["items"][1]
+        workload["kind"] = "Deployment"
+        workload["spec"].pop("serviceName")
+        pod = workload["spec"]["template"]["spec"]
+        container = pod["containers"][0]
+        container["env"] = [{"name": "PYTHONDONTWRITEBYTECODE", "value": "1"}]
+        container["volumeMounts"] = [{"name": "temporary", "mountPath": "/tmp"}]
+        pod["volumes"] = [{"name": "temporary", "emptyDir": {"sizeLimit": "64Mi"}}]
+    return result
 
 
 def evidence_path(name: str) -> Path:
@@ -409,7 +447,12 @@ def deploy(profile: dict[str, str]) -> None:
             *kubectl,
             "rollout",
             "status",
-            "statefulset/" + profile["application"],
+            (
+                "deployment/"
+                if profile.get("workload") in {"stateless-chatbot", "python-service"}
+                else "statefulset/"
+            )
+            + profile["application"],
             "--timeout=300s",
         ],
         timeout=320,
@@ -432,9 +475,14 @@ def deploy(profile: dict[str, str]) -> None:
         or pods["items"][0]["spec"]["containers"][0]["image"] != image
     ):
         raise ValueError("Running workload differs from the published digest")
-    volume = json.loads(run([*kubectl, "get", "pvc", "payment-api-data", "-o", "json"]))
-    if volume.get("status", {}).get("phase") != "Bound":
-        raise ValueError("Durable application storage is not bound")
+    storage = "not-required"
+    if profile.get("workload", "payments") == "payments":
+        volume = json.loads(
+            run([*kubectl, "get", "pvc", "payment-api-data", "-o", "json"])
+        )
+        if volume.get("status", {}).get("phase") != "Bound":
+            raise ValueError("Durable application storage is not bound")
+        storage = "Bound"
     with tempfile.TemporaryFile() as logs:
         forward = subprocess.Popen(
             [
@@ -464,11 +512,33 @@ def deploy(profile: dict[str, str]) -> None:
                 time.sleep(1)
             else:
                 raise TimeoutError("Deployed application health check did not pass")
-            with urllib.request.urlopen(
-                "http://127.0.0.1:18080/payments", timeout=5
-            ) as response:
-                if response.status != 200 or not isinstance(json.load(response), list):
-                    raise ValueError("Deployed application API check failed")
+            if profile.get("workload") == "stateless-chatbot":
+                request = urllib.request.Request(
+                    "http://127.0.0.1:18080/api/chat",
+                    data=json.dumps(
+                        {"message": "Explain the pipeline", "history": []}
+                    ).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    reply = json.load(response)
+                    if (
+                        response.status != 200
+                        or reply.get("provider") != "demo-faq"
+                        or reply.get("live_ai") is not False
+                        or not reply.get("reply")
+                        or reply.get("topic") != "pipeline"
+                    ):
+                        raise ValueError("Deployed chatbot API verification failed")
+            else:
+                with urllib.request.urlopen(
+                    "http://127.0.0.1:18080/payments", timeout=5
+                ) as response:
+                    if response.status != 200 or not isinstance(
+                        json.load(response), list
+                    ):
+                        raise ValueError("Deployed application API check failed")
         finally:
             forward.terminate()
             try:
@@ -483,7 +553,7 @@ def deploy(profile: dict[str, str]) -> None:
             "image": image,
             "cluster": profile["cluster"],
             "namespace": profile["namespace"],
-            "storage": "Bound",
+            "storage": storage,
             "health": "passed",
             "api": "passed",
             "status": "succeeded",
@@ -491,13 +561,145 @@ def deploy(profile: dict[str, str]) -> None:
     )
 
 
+def configure(profile: dict[str, str]) -> None:
+    with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+        for key in ("publisher_role", "deployer_role", "account_id", "region"):
+            if "\n" in profile[key] or "\r" in profile[key]:
+                raise ValueError("Invalid target output")
+            output.write(key + "=" + profile[key] + "\n")
+
+
+def verify_generic_website(url: str) -> dict[str, str]:
+    if not re.fullmatch(r"https://[a-z0-9]{8,64}\.cloudfront\.net", url):
+        raise ValueError("Unregistered public website URL")
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            raise ValueError("Website redirects are not allowed during verification")
+
+    opener = urllib.request.build_opener(NoRedirect())
+
+    def read(path: str) -> bytes:
+        with opener.open(url + path, timeout=15) as response:
+            body = response.read(1_048_577)
+            if response.status != 200 or response.url != url + path or len(body) > 1_048_576:
+                raise ValueError("Website response or redirect could not be verified")
+            return body
+
+    for attempt in range(24):
+        try:
+            if json.loads(read("/health")).get("status") != "ok":
+                raise ValueError("Website health verification failed")
+            page = read("/").decode()
+            if not page.strip():
+                raise ValueError("Website page is empty")
+            assets = set(re.findall(r'''(?:src|href)=["'](/[^"'<>]+\.(?:js|css))(?:["'])''', page))
+            if len(assets) > 30:
+                raise ValueError("Website exceeds the asset verification limit")
+            for path in assets:
+                if path.startswith("//") or "/../" in path or not read(path):
+                    raise ValueError("Website asset verification failed")
+            return {"https": "passed", "page": "passed", "health": "passed", "assets": "passed"}
+        except (OSError, ValueError):
+            if attempt == 23:
+                raise
+            time.sleep(5)
+    raise RuntimeError("Website verification did not complete")
+
+
+def website(profile: dict[str, str]) -> None:
+    """Require the registered HTTPS entry point and real application behavior."""
+    url = profile.get("website_url")
+    if url is None:
+        return
+    if profile.get("workload") == "python-service":
+        result = verify_generic_website(url)
+        write_report("website.json", {**provenance(profile), "website_url": url, **result})
+        return
+    if profile.get("workload") != "stateless-chatbot" or not re.fullmatch(
+        r"https://[a-z0-9]{8,64}\.cloudfront\.net", url
+    ):
+        raise ValueError("Unregistered public website URL")
+
+    def check(path: str, *, data: bytes | None = None) -> bytes:
+        request = urllib.request.Request(
+            url + path,
+            data=data,
+            headers={"Content-Type": "application/json"} if data else {},
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            if response.status != 200 or response.url != url + path:
+                raise ValueError("Website returned an unexpected status or redirect")
+            body = response.read(1_048_577)
+            if len(body) > 1_048_576:
+                raise ValueError("Website response exceeds verification limit")
+            return body
+
+    for attempt in range(24):
+        try:
+            if json.loads(check("/health")) != {"status": "ok"}:
+                raise ValueError("Website health check failed")
+            page = check("/").decode()
+            if "<title>Harbor" not in page or 'id="chat-form"' not in page:
+                raise ValueError("Website does not serve the expected chatbot page")
+            for path in ("/static/chat.css", "/static/chat.js"):
+                if not check(path):
+                    raise ValueError("Website asset is empty")
+            reply = json.loads(
+                check(
+                    "/api/chat",
+                    data=json.dumps(
+                        {"message": "Explain the pipeline", "history": []}
+                    ).encode(),
+                )
+            )
+            if (
+                reply.get("provider") != "demo-faq"
+                or reply.get("live_ai") is not False
+                or not reply.get("reply")
+                or reply.get("topic") != "pipeline"
+            ):
+                raise ValueError("Public chatbot API verification failed")
+            break
+        except (OSError, ValueError):
+            if attempt == 23:
+                raise
+            time.sleep(5)
+    write_report(
+        "website.json",
+        {
+            **provenance(profile),
+            "website_url": url,
+            "https": "passed",
+            "page": "passed",
+            "assets": "passed",
+            "api": "passed",
+            "status": "succeeded",
+        },
+    )
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with Path(summary).open("a") as output:
+            output.write(
+                f"\n### Development website\n\n[Open app]({url})\n\nHTTPS, page, assets and chat API verified.\n"
+            )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=["build", "publish", "deploy"])
+    parser.add_argument(
+        "phase", choices=["configure", "build", "publish", "deploy", "website"]
+    )
     args = parser.parse_args()
     try:
         profile = target()
-        {"build": build, "publish": publish, "deploy": deploy}[args.phase](profile)
+        {
+            "configure": configure,
+            "build": build,
+            "publish": publish,
+            "deploy": deploy,
+            "website": website,
+        }[args.phase](profile)
     except Exception as error:
         write_report(
             "failure.json",

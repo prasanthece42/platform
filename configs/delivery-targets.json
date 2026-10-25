@@ -15,6 +15,23 @@
       "ecr_repository": "aegisai/payment-api",
       "publisher_role": "arn:aws:iam::230001290423:role/aegisai-payments-dev-publisher",
       "deployer_role": "arn:aws:iam::230001290423:role/aegisai-payments-dev-deployer"
+    },
+    "ai-platform-rag-new-dev": {
+      "team_id": "ai-platform",
+      "repository": "prasanthece42/rag-new",
+      "repository_id": "1432587410",
+      "repository_owner_id": "4831204",
+      "branch": "main",
+      "account_id": "230001290423",
+      "region": "ca-central-1",
+      "cluster": "aegis-rag-new-f294a449f8-dev",
+      "namespace": "ai-platform-rag-new-dev",
+      "ecr_repository": "aegisai/ai-platform/rag-new",
+      "application": "rag-new",
+      "service_account": "rag-new-runtime",
+      "publisher_role": "arn:aws:iam::230001290423:role/aegisai-ai-platform-rag-new-dev-publisher",
+      "deployer_role": "arn:aws:iam::230001290423:role/aegisai-ai-platform-rag-new-dev-deployer",
+      "workload": "python-service"
     }
   }
 }
