@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools==83.0.0", "wheel==0.46.2"]
+requires = ["setuptools==84.1.0", "wheel==0.46.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 dependencies = ["fastapi==0.158.1", "pydantic==2.14.1", "uvicorn==0.34.2"]
 
 [project.optional-dependencies]
-ci = ["build==1.2.2.post1", "setuptools==83.0.0", "wheel==0.46.2", "pytest==9.1.1", "httpx==0.28.1"]
+ci = ["build==1.2.2.post1", "setuptools==84.1.0", "wheel==0.46.2", "pytest==9.1.1", "httpx==0.28.1"]
 
 [tool.setuptools.packages.find]
 include = ["payments_api*"]
